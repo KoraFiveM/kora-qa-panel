@@ -1,0 +1,24 @@
+{
+  "name": "kora-qa-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "build:web": "pnpm --dir web install --frozen-lockfile && pnpm --dir web build"
+  },
+  "dependencies": {
+    "@cucumber/cucumber-expressions": "^20.1.0",
+    "@cucumber/gherkin": "^42.0.1",
+    "@cucumber/messages": "^34.2.1",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/static": "^10.1.10",
+    "fastify": "^5.12.8",
+    "mysql2": "^3.24.6"
+  }
+}

@@ -1,0 +1,27 @@
+# /etc/systemd/system/kora-qa-panel.service
+[Unit]
+Description=Kora QA panel (UI + API on 127.0.0.1:47620, bughook-compatible API on HOOK_PORT)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=koraqa
+Group=koraqa
+WorkingDirectory=/home/DevTestingKora/kora/kora-qa-panel
+EnvironmentFile=/etc/kora-qa/config.env
+EnvironmentFile=/etc/kora-qa/secrets.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+# apply-fix.sh runs as a child of this service through sudo (deploy/sudoers-kora-qa) and writes into RES_DIR (/home)
+# and /var/lib/claude-bugfix, so no NoNewPrivileges / ProtectHome / ProtectSystem here: they would be inherited and
+# break Apply/Revert. The panel itself only writes /var/lib/kora-qa.
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

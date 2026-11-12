@@ -1,0 +1,14 @@
+--- a/schemas/fix.json
++++ b/schemas/fix.json
+@@ -13,6 +13,11 @@
+     "test_steps": { "type": "string", "description": "How a tester confirms the fix in game." },
+     "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+     "reporter_question": { "type": "string", "description": "Only when status is needs_info." },
++    "scenario": {
++      "type": "string",
++      "maxLength": 8000,
++      "description": "Optional, only when status is fixed: one Gherkin Scenario (no Feature: line) that reproduces the bug as a regression test, tags @issue-<threadId> @regression @<resource> on the line above Scenario:, every step matching exactly one pattern in kora_qa/shared/steps.json (see fix-system.md). Saved by the fixer as <resource>/tests/issue-<threadId>.feature. Empty string or omitted when there is none."
++    },
+     "config_options": {
+       "type": "array",
+       "items": {

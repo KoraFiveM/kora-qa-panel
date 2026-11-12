@@ -1,0 +1,10 @@
+# /etc/sudoers.d/kora-qa  (install with: visudo -cf deploy/sudoers-kora-qa && install -m 0440 deploy/sudoers-kora-qa /etc/sudoers.d/kora-qa)
+# The panel (user koraqa) may run only these apply-fix.sh modes, as root, without a password.
+# apply-fix.sh validates the thread id (^[0-9]{15,25}$) and every path in meta.json itself.
+Cmnd_Alias KORAQA_FIX = /opt/claude-bugfix/apply-fix.sh --list, \
+                        /opt/claude-bugfix/apply-fix.sh --show *, \
+                        /opt/claude-bugfix/apply-fix.sh --apply *, \
+                        /opt/claude-bugfix/apply-fix.sh --revert *
+Defaults:koraqa !requiretty
+Defaults:koraqa env_reset
+koraqa ALL=(root) NOPASSWD: KORAQA_FIX

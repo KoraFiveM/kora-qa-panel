@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["fixed", "cannot_fix", "needs_info"],
+      "description": "fixed = you edited files and believe the bug is resolved; cannot_fix = root cause not found or fix not safe; needs_info = the reporter must answer something first"
+    },
+    "summary": { "type": "string", "maxLength": 300, "description": "Plain-English summary for the Discord thread: cause and fix, no code." },
+    "details": { "type": "string", "description": "Technical notes for Jamie: root cause, what changed and why, anything uncertain." },
+    "files_changed": { "type": "array", "items": { "type": "string" }, "description": "Paths relative to the working directory." },
+    "test_steps": { "type": "string", "description": "How a tester confirms the fix in game." },
+    "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "reporter_question": { "type": "string", "description": "Only when status is needs_info." },
+    "scenario": {
+      "type": "string",
+      "maxLength": 8000,
+      "description": "Optional, only when status is fixed: one Gherkin Scenario (no Feature: line) that reproduces the bug as a regression test, tags @issue-<threadId> @regression @<resource> on the line above Scenario:, every step matching exactly one pattern in kora_qa/shared/steps.json (see fix-system.md). Saved by the fixer as <resource>/tests/issue-<threadId>.feature. Empty string or omitted when there is none."
+    },
+    "config_options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "resource": { "type": "string", "description": "Resource folder the option was added to." },
+          "name": { "type": "string", "description": "Config key, e.g. Config.EnableFoo." },
+          "default": { "type": "string", "description": "Default value as written in the config file." },
+          "description": { "type": "string", "description": "One-line comment explaining what it does." }
+        },
+        "required": ["resource", "name", "default", "description"]
+      },
+      "description": "New config options this change was gated behind (see fix-system.md rule 7). Empty if the change needed no new option."
+    }
+  },
+  "required": ["status", "summary", "details", "files_changed", "risk"]
+}

@@ -1,0 +1,137 @@
+--- a/bugfix.sh
++++ b/bugfix.sh
+@@ -103,7 +103,7 @@
+   local live=$1 dest=$2
+   mkdir -p "$dest"
+   ( cd "$live" && lgit ls-files -co --exclude-standard -z ) \
+-    | grep -zEi '\.(lua|js|mjs|cjs|ts|json|html|htm|css|cfg|sql|xml|meta|md|txt|yml|yaml)$' \
++    | grep -zEi '\.(lua|js|mjs|cjs|ts|json|html|htm|css|cfg|sql|xml|meta|md|txt|yml|yaml|feature)$' \
+     | ( cd "$live" && xargs -0 -r cp --parents -t "$dest" -- )
+ }
+ 
+@@ -200,6 +200,74 @@
+   printf '%s' "${why%; }"
+ }
+ 
++# Regression scenario from the fix result (fix.json `scenario`, see fix-system.md): written as <res>/tests/issue-<tid>.feature
++# into the edited resource and that resource's patch is made again, so it is reviewed and applied with the fix. <res> is the one
++# edited resource tagged @<res> in the scenario (or the only edited resource). The resource's fxmanifest gets
++# `qa_feature 'tests/*.feature'` when it has no qa_feature line yet (the QA panel only scans resources that opt in).
++# Never fails the fix: a scenario that doesn't fit is dropped and the reason kept in meta.json (scenarioNote).
++# Uses process_bug's locals (work tid resources fixres) and sets scenario_text / scenario_file / scenario_note.
++add_scenario() {
++  local raw res="" r f total=0 n problems gate2 manifest
++  local -a changed=() tagged=() missing=()
++  scenario_text=""; scenario_file=""; scenario_note=""
++  raw=$(jq -r '.scenario // ""' <<<"$fixres" | tr -d '\000-\010\013\014\016-\037\177')
++  raw=${raw//$'\r'/}
++  [[ -n "${raw//[[:space:]]/}" ]] || return 0
++  _scn_drop() { scenario_note="scenario dropped: $1"; log "bug $tid: $scenario_note"; }
++  for r in "${resources[@]}"; do if [[ -f "$work/patches/$r.patch" ]]; then changed+=("$r"); fi; done
++  # (grep reads a process substitution, not a pipe: with pipefail an early grep -q exit could fail the pipeline)
++  for r in "${resources[@]}"; do if grep -qxF "@$r" < <(tr -s '[:space:]' '\n' <<<"$raw"); then tagged+=("$r"); fi; done
++  if ((${#tagged[@]} == 1)); then res=${tagged[0]}
++  elif ((${#tagged[@]} == 0 && ${#changed[@]} == 1)); then res=${changed[0]}
++  else _scn_drop "can't tell which edited resource it tests (tag it @<resource>)"; return 0; fi
++  if [[ ! -f "$work/patches/$res.patch" ]]; then _scn_drop "it is tagged @$res, which this fix does not edit"; return 0; fi
++  # The fixer adds the Feature: line itself.
++  raw=$(grep -vE '^[[:space:]]*Feature:' <<<"$raw" || true)
++  n=$(grep -cE '^[[:space:]]*(Scenario|Scenario Outline|Scenario Template|Example):' <<<"$raw" || true)
++  if [[ "$n" != 1 ]]; then _scn_drop "expected exactly one Scenario, found $n"; return 0; fi
++  if LC_ALL=C awk 'length($0) > 500 { found = 1; exit } END { exit !found }' <<<"$raw"; then _scn_drop "a line is over 500 characters"; return 0; fi
++  # Required tags: added on their own line above the Scenario when the model left one out.
++  for f in "@issue-$tid" "@regression" "@$res"; do if ! grep -qxF "$f" < <(tr -s '[:space:]' '\n' <<<"$raw"); then missing+=("$f"); fi; done
++  if ((${#missing[@]})); then
++    raw=$(awk -v tags="${missing[*]}" '!done && /^[[:space:]]*(Scenario|Scenario Outline|Scenario Template|Example):/ { print tags; done = 1 } { print }' <<<"$raw")
++  fi
++  f="$work/src/$res/tests/issue-$tid.feature"
++  mkdir -p "$(dirname "$f")" || { _scn_drop "could not create $res/tests"; return 0; }
++  {
++    echo "# Regression test for QA issue $tid, written by the automatic fixer with the fix (patch $res.patch)."
++    echo "Feature: Issue $tid regression"
++    echo
++    printf '%s\n' "$raw"
++  } >"$f"
++  manifest="$work/src/$res/fxmanifest.lua"
++  local manifest_saved="$work/.fxmanifest-$res.before-scenario"
++  rm -f "$manifest_saved"
++  if [[ -f "$manifest" ]] && ! grep -qE '^[[:space:]]*qa_feature[[:space:](]' "$manifest"; then
++    cp -p "$manifest" "$manifest_saved"
++    if [[ -n "$(tail -c1 "$manifest")" ]]; then echo >>"$manifest"; fi
++    printf "qa_feature 'tests/*.feature'\n" >>"$manifest"
++  fi
++  _scn_undo() { # put the resource back as the fix left it (the model's own edits stay) and remake its patch
++    rm -f "$f"; rmdir "$work/src/$res/tests" 2>/dev/null || true
++    if [[ -f "$work/base/$res/tests/issue-$tid.feature" ]]; then cp "$work/base/$res/tests/issue-$tid.feature" "$f"; fi
++    if [[ -f "$manifest_saved" ]]; then cp -p "$manifest_saved" "$manifest"; fi
++    make_patch "$work" "$res" "$work/patches/$res.patch" || true
++  }
++  if ! make_patch "$work" "$res" "$work/patches/$res.patch"; then _scn_drop "patch could not be made again"; _scn_undo; return 0; fi
++  problems=$(regression_check "$work" "$res") || true
++  for r in "${changed[@]}"; do
++    n=$(grep -cE '^[+-][^+-]' "$work/patches/$r.patch" || true); total=$((total + n))
++  done
++  gate2=$(patch_gate "$work" "$work/patches" "${changed[@]}")
++  if [[ -n "$problems" || -n "$gate2" ]] || ((total > MAX_PATCH_LINES)); then
++    _scn_drop "it would fail the patch checks (${problems:+syntax: ${problems:0:200}; }${gate2:+$gate2; }$total lines)"
++    _scn_undo; return 0
++  fi
++  scenario_text=$raw
++  scenario_file="$res/tests/issue-$tid.feature"
++  log "bug $tid: regression scenario added as $scenario_file"
++}
++
+ # Moves everything in a thread's fix folder except history/ (applied.json included) into
+ # history/<UTC ts>/. Prints that directory, or nothing when there was nothing to keep.
+ archive_fix_dir() { # dir
+@@ -399,6 +467,8 @@
+   tri_model=$(jq -r '.model' <<<"$tri")
+   tri_effort=$(jq -r '.effort // ""' <<<"$tri")
+   [[ "$tri_effort" =~ ^(low|medium|high)$ ]] || tri_effort=""
++  # IGNORE_TRIAGE_EFFORT=1 (config.env): always the configured *_EFFORT, never triage's pick.
++  if [[ "${IGNORE_TRIAGE_EFFORT:-0}" == 1 ]]; then tri_effort=""; fi
+   # Cycle FINAL_CYCLE: Opus high, no fallback. Otherwise triage's pick (a Mod override goes straight to escalation).
+   if ((cycle >= FINAL_CYCLE)); then models=("$FINAL_MODEL"); final=1; tri_effort=""
+   elif [[ -n "$override" || "$tri_model" == opus ]]; then models=("$ESCALATE_MODEL")
+@@ -419,6 +489,7 @@
+   local fix_prompt="Fix the bug described in BUG.md. Start with TRIAGE.md. Edit only inside: ${resources[*]}."
+   [[ "$kind" == feature ]] && fix_prompt="Implement the feature request described in BUG.md. Start with TRIAGE.md. Edit only inside: ${resources[*]}."
+   [[ -n "$override" ]] && fix_prompt+=" A Mod asked for this attempt: read the Mod override section in TRIAGE.md."
++  fix_prompt+=" If you fix it and it can be reproduced in game, also return a regression scenario in \`scenario\` (rules in your system prompt; read the step catalog first)."
+ 
+   local mi=-1
+   for m in "${models[@]}"; do
+@@ -480,6 +551,10 @@
+     return 0
+   fi
+ 
++  # Regression scenario (optional): into the patch of the resource it tests, before the fix folder is written.
++  local scenario_text="" scenario_file="" scenario_note=""
++  add_scenario
++
+   # Keep the previous fix folder (applied.json included) under history/ instead of deleting it.
+   local out="$FIX_ROOT/fixes/$tid" patchid hist=""
+   # A dry run posts nothing, so it must not replace the real fix folder either.
+@@ -500,7 +575,7 @@
+   cfg_lines=$(jq -r '(.config_options // [])[] | "Config: " + .name + "=" + .default + " (" + .resource + ")"' <<<"$fixres")
+   [[ -n "$cfg_lines" ]] && summary_text="$summary_text"$'\n'"$cfg_lines"
+   if ! post_result fixed_awaiting_restart fixed_awaiting_restart \
+-      "Fix ready for review ($changed, risk: $risk, patch $patchid). Waiting for approval before it goes live." \
++      "Fix ready for review ($changed, risk: $risk, patch $patchid${scenario_file:+, regression scenario $scenario_file}). Waiting for approval before it goes live." \
+       "$used_model" "$changed" "$summary_text" "$patchid" "$reason"; then
+     # Never leave a fix folder for a status that wasn't posted; the patch stays in the work dir.
+     restore_fix_dir "$out" "$hist" || log "could not restore $out"
+@@ -518,10 +593,13 @@
+   patchid=$(cat "$out"/*.patch | sha256sum | cut -c1-10)
+   jq -n --arg tid "$tid" --arg title "$title" --arg model "$used_model" --arg patchId "$patchid" \
+         --arg created "$(date -Is)" --arg work "$work" --arg kind "$kind" --arg reasoning "$reason" --argjson fix "$fixres" \
++        --arg scenario "$scenario_text" --arg scenarioFile "$scenario_file" --arg scenarioNote "$scenario_note" \
+         --rawfile res "$work/resources.tsv" '
+     {threadId:$tid, title:$title, model:$model, patchId:$patchId, createdAt:$created, work:$work, kind:$kind,
+      summary:$fix.summary, details:$fix.details, risk:$fix.risk, testSteps:($fix.test_steps // ""),
+      reasoning:$reasoning, config_options:($fix.config_options // []),
++     scenario:(if $scenario == "" then null else $scenario end), scenarioFile:(if $scenarioFile == "" then null else $scenarioFile end),
++     scenarioNote:(if $scenarioNote == "" then null else $scenarioNote end),
+      resources: [$res | split("\n")[] | select(length>0) | split("\t") | {name:.[0], path:.[1], head:.[2], patch:(.[0] + ".patch")}]}
+     | .resources |= map(select(.name as $n | ($n|length)>0))' >"$out/meta.json" || return 1
+   # keep only resources that actually changed
